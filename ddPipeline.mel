@@ -1,0 +1,788 @@
+// Replace Object with a small Cube, keep hierarchy and shader assignment
+
+global proc ddReplaceWithCube()
+{
+    string $sel[] = `ls -sl`;
+
+    //print $sel;
+
+    for ($each in $sel)
+    {
+        select $each;
+        string $shList[] = `hyperShade -smn ""`;
+        string $shSel[] = `ls -sl`;
+        //print $shSel;
+        string $parName[] = `listRelatives -parent $each`;
+        //print $parName;
+        delete $each;
+        select `polyCube -w 0.1 -h 0.1 -d 0.1 -sx 1 -sy 1 -sz 1 -ax 0 1 0 -cuv 4 -ch 1 -name $each`;
+        delete -ch;
+        hyperShade -assign $shSel[0];
+        parent $each $parName[0];
+    }
+
+}
+
+
+// ddMaterialIssueChecker
+global proc ddMaterialIssueChecker()
+{
+    string $sel[] = `ls "*_lo"`;
+    //print $sel;
+    int $ddWarningSign = 0;
+    select -cl;
+    for ($each in $sel)
+    {
+        /*
+        string $elements[];
+        tokenize( $each, "_lo", $elements );
+        string $stripped = $elements[ `size $elements` - 1 ];
+        */
+        
+        if (`match "_lo$" $each` == "_lo")
+        {
+            //print $each;
+            //print "\n";
+            
+            string $elements[];
+            tokenize $each "_" $elements;
+            string $stripped = $elements[0];
+            //print ($stripped + "\n");
+            //print $elements;
+            
+            string $shapes[] = `listRelatives -s $each`;
+            //print $shapes[0];
+            string $sgNode[] = `listConnections -source true -type shadingEngine $shapes[0]`;
+            //print $sgNode;
+            //print "\n";
+            
+            string $material[] = `listConnections -source 1 -plugs 0 ($sgNode[0] + ".surfaceShader")`;
+            //print $material;
+            
+            if (`objExists ($stripped + "_hi")`)
+            {
+                //print ($stripped + "_hi" + "\n");
+                string $hiresobj = ($stripped + "_hi");
+                
+                string $shapesHi[] = `listRelatives -s $hiresobj`;
+                string $sgNodeHi[] = `listConnections -source true -type shadingEngine $shapesHi[0]`;   
+                string $materialHi[] = `listConnections -source 1 -plugs 0 ($sgNodeHi[0] + ".surfaceShader")`; 
+                
+                if ($materialHi[0] != $material[0])
+                {
+                    print  ($each + " and its _hi is not using the same material!!!");
+                    select -add $each;
+                    select -add ($stripped + "_hi");
+                    
+                    $ddWarningSign = 1;
+                }
+            }
+            
+        }
+    }
+    
+    if ($ddWarningSign == 1)
+    {
+    confirmDialog 
+    -title "Material Assignment Issue Checker" 
+    -message "It looks like the selected object pairs (_lo and _hi) using different materials!"
+    -button "Uhhhh, thanks!" 
+    -button "Who cares"
+    -defaultButton "Uhhhh, thanks!"
+    -cancelButton "Uhhhh, thanks!"
+    -dismissString "Uhhhh, thanks!"    ;
+    }
+    
+    else
+    {
+    confirmDialog 
+    -title "Material Assignment Issue Checker" 
+    -message "Everything looks OK!"
+    -button "Nice" 
+    -defaultButton "Nice"
+    -cancelButton "Nice"
+    -dismissString "Nice"    ;
+    }
+}
+
+
+// Export Seleceted Objects for Substance Painter
+
+global proc ddExportForSubstance()
+{
+    string $path = `internalVar -userTmpDir`;
+    string $pathList[] = `getFileList -folder $path`;
+
+    if(size($pathList) >= 1)
+    {
+        string $filename = "exported";
+        string $extension = ".fbx";
+        string $fullpath = $path + $filename + $extension;
+
+        //FBX Options
+        FBXExportTriangulate -v false;
+        FBXExportSmoothingGroups -v true;
+        FBXExportSmoothMesh -v false;
+        FBXExport -f $fullpath -s;
+        
+        warning ("exported.fbx is Exported to the " + $path + " folder");
+    }
+    else if(size($pathList) == 0)
+    {
+        print ("Something went wrong.");
+    }
+}
+
+// define the proc for the FileBrowser Command
+global proc int ddProxyHiresASS(string $dirpath,string $type) 
+{
+    ///////////////////////////////////////////////////////////////////////
+    // Freeze transform before export to avoid Double Transformation
+    // makeIdentity -apply true -t 1 -r 1 -s 1 -n 0 -pn 1;
+    
+    // Get the list from Selection. 
+    // The first selected object (or group or locator) will be the exported ASS the second one will be the proxy of that.
+    string $ddAssSel[] = `ls -sl`;
+    
+    ///////////////////////////////////////////////////////////////////////
+    // Create the variables for manageable paths
+    // The folder path
+    string $path = ($dirpath + "/");
+    // The filename = the selected Group's name
+    string $filename = $ddAssSel[0];
+    // The extension in this case .ass
+    string $extension = ".ass";
+    // Put everithing togehter
+    string $fullpath = $path + $filename + $extension;
+    
+    ///////////////////////////////////////////////////////////////////////
+    // Select the group for exporting
+    select $ddAssSel[0]; 
+    // Export the selection as .ass
+    file -force -options "-shadowLinks 1;-mask 6399;-lightLinks 1;-boundingBox;-fullPath" -typ "ASS Export" -pr -es $fullpath;
+           
+    // Set the proxy shape attributes
+    string $shName[] = `listRelatives -s $ddAssSel[1]`; 
+    setAttr ($shName[0] + ".aiTranslator") -type "string" "procedural";
+    setAttr ($shName[0] + ".dso") -type "string" $fullpath;
+    setAttr ($shName[0] + ".aiOverrideLightLinking") 0;
+    setAttr ($shName[0] + ".aiOverrideShaders") 0;
+    
+       
+    ///////////////////////////////////////////////////////////////////////
+    // Export the hires as .ma file, for later editing
+    select $ddAssSel[0];
+    // And export the high res geo as .ma file, so you can import it in any scene
+    file -force -options "v=0;" -typ "mayaAscii" -pr -es ($path + "editable_hires/" + $filename + ".ma");
+
+    // Select the proxy for easier usage
+    select $ddAssSel[1];
+    sets -e -forceElement initialShadingGroup;
+    file -force -options "v=0;" -typ "mayaAscii" -pr -es ($path + "proxy/" + $filename + "_proxy"  + ".ma");
+
+    // Turn off visibility for the exported Group (or object)
+    setAttr ($ddAssSel[0] + ".visibility") 0;
+    
+    //system ("explorer \"" + toNativePath($path) + "\"");
+    return true; 
+}
+
+
+
+// Replace proxy with Hires
+global proc ddReplaceWithHires()
+{
+    string $sel[] = `ls -sl`;
+    
+    for ($each in $sel)
+    {
+    
+        select $each;
+        string $parGRP[] = `listRelatives -p -pa`;
+
+        string $assPath = `getAttr ($each + ".dso")`;
+
+    
+        if ((size($assPath)) != 0)
+        {
+            float $locT[] = `xform -q -ws -t`;
+            float $locR[] = `xform -q -ws -ro`;
+            float $locS[] = `xform -q -ws -s`;
+            
+            //print $assPath;
+            //print "\n";
+            
+            string $path[];
+            tokenize $assPath "." $path;
+            print $path;
+            print "\n";
+            
+            
+            string $pathMod[];
+            tokenize $path[0] "/" $pathMod;
+            
+            int $pathLength = size($pathMod);
+            //print $pathLength;
+            
+            string $importPath = "";
+            
+            // Build up the Editable Hires path from the Ass path
+            for ($i = 0; $i < ($pathLength); $i++)
+            {
+                if ($i == 0)
+                {
+                    $importPath = ($pathMod[0] + "/");
+                }
+                
+                else if ($i == ($pathLength-2))
+                {
+                    $importPath = ($importPath + $pathMod[$i] + "/editable_hires" + "/");
+                }
+                
+                else if ($i == ($pathLength-1))
+                {
+                     $importPath = ($importPath + $pathMod[$i] + ".ma");
+                }
+                
+                else 
+                {
+                    $importPath = ($importPath + $pathMod[$i] + "/");
+                }
+            }
+            print $importPath;
+            print "\n";
+            
+            
+            
+            int $rnd = rand(0,5000000);
+            
+            
+            file -import -type "mayaAscii" -gr -groupName ($each + "_" + $rnd) -ignoreVersion -ra true -mergeNamespacesOnClash false -options "v=0;"  -pr  -importTimeRange "combine" $importPath;
+            
+            select ($each + "_" + $rnd);
+            pickWalk -d down;
+            parent -w;
+            string $hiresReplaced[] = `ls -sl`;
+
+            xform -os -piv 0 0 0;
+            
+            xform -ws -t $locT[0] $locT[1] $locT[2];
+            xform -ws -ro $locR[0] $locR[1] $locR[2];
+            xform -ws -s $locS[0] $locS[1] $locS[2];
+            
+            //setAttr ($each + ".visibility") 0;
+
+            delete ($each + "_" + $rnd);
+
+            addAttr -ln "assetPath"  -dt "string" $hiresReplaced[0] ;
+            setAttr -e-channelBox true ($hiresReplaced[0] + ".assetPath");
+
+
+            
+            // Build up the Proxy path from the Ass path
+            string $proxyPath = "";
+            
+            for ($i = 0; $i < ($pathLength); $i++)
+            {
+                if ($i == 0)
+                {
+                    $proxyPath = ($pathMod[0] + "/");
+                }
+                
+                else if ($i == ($pathLength-2))
+                {
+                    $proxyPath = ($proxyPath + $pathMod[$i] + "/proxy" + "/");
+                }
+                
+                else if ($i == ($pathLength-1))
+                {
+                     $proxyPath = ($proxyPath + $pathMod[$i] + "_proxy" + ".ma");
+                }
+                
+                else 
+                {
+                    $proxyPath = ($proxyPath + $pathMod[$i] + "/");
+                }
+            }
+            //print $proxyPath;
+            //print "\n";
+            
+            
+            
+            
+            if (`filetest -r $proxyPath`)
+            {
+                setAttr -type "string" ($hiresReplaced[0] + ".assetPath") $proxyPath;
+            }
+
+            else
+            {
+                $proxyPath = "";
+            
+                for ($i = 0; $i < ($pathLength); $i++)
+                {
+                    if ($i == 0)
+                    {
+                        $proxyPath = ($pathMod[0] + "/");
+                    }
+                    
+                    else if ($i == ($pathLength-2))
+                    {
+                        $proxyPath = ($proxyPath + $pathMod[$i] + "/proxy" + "/");
+                    }
+                    
+                    else if ($i == ($pathLength-1))
+                    {
+                         $proxyPath = ($proxyPath + $pathMod[$i] + ".ma");
+                    }
+                    
+                    else 
+                    {
+                        $proxyPath = ($proxyPath + $pathMod[$i] + "/");
+                    }
+                }
+                print $proxyPath;
+                print "\n";
+                
+                setAttr -type "string" ($hiresReplaced[0] + ".assetPath") $proxyPath;
+            }
+        }
+        
+        delete $each;
+
+        if ($parGRP[0] != "")
+        {
+            parent (`ls -sl`) $parGRP[0] ;
+        }
+
+    }
+}
+
+// Replace with proxy
+
+global proc ddReplaceWithProxy()
+{
+    string $sel[] = `ls -sl`;
+
+    for ($each in $sel)
+    {
+        
+        select $each;
+        string $parGRP[] = `listRelatives -p -pa`;
+        string $assetPath = `getAttr ($each + ".assetPath")`;
+        //print $assetPath;
+        
+        string $assetNameStrip[];
+        tokenize $assetPath "/" $assetNameStrip;
+        
+        string $assetName = substituteAllString(($assetNameStrip[(size($assetNameStrip)-1)]), ".ma", "");
+        //print "\n";
+        //print $assetName;
+        
+        
+        float $locT[] = `xform -q -ws -t`;
+        float $locR[] = `xform -q -ws -ro`;
+        float $locS[] = `xform -q -ws -s`;
+        
+        int $rnd = rand(0,5000000);
+        
+        file -import -type "mayaAscii" -namespace $assetName -gr -groupName ($assetName + "_" + $rnd) -ignoreVersion -ra true -mergeNamespacesOnClash true -options "v=0;"  -pr  -importTimeRange "combine" $assetPath;
+        //print $replaced;
+        
+        select ($assetName + "_" + $rnd);
+        pickWalk -d down;
+        parent -w;
+        
+        xform -os -piv 0 0 0;
+        
+        xform -ws -t $locT[0] $locT[1] $locT[2];
+        xform -ws -ro $locR[0] $locR[1] $locR[2];
+        xform -ws -s $locS[0] $locS[1] $locS[2];
+        
+        delete ($assetName + "_" + $rnd);
+        
+        //setAttr ($each + ".visibility") 0;
+
+        delete $each;
+
+        if ($parGRP[0] != "")
+        {
+            parent (`ls -sl`) $parGRP[0] ;
+        }
+    }
+
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// define the proc for the FileBrowser Command
+global proc int ddEachASS(string $dirpath,string $type) 
+{
+    ///////////////////////////////////////////////////////////////////////
+    // Freeze transform before export to avoid Double Transformation
+    // makeIdentity -apply true -t 1 -r 1 -s 1 -n 0 -pn 1;
+    
+    // Get the list from Selection. 
+    // The first selected object (or group or locator) will be the exported ASS the second one will be the proxy of that.
+    string $ddAssSel[] = `ls -sl`;
+
+    string $path = ($dirpath + "/");
+    
+    for ($each in $ddAssSel)
+    {
+    
+        ///////////////////////////////////////////////////////////////////////
+        // Create the variables for manageable paths
+        // The folder path
+        //string $path = ($dirpath + "/");
+        // The filename = the selected Group's name
+        string $filename = $each;
+        // The extension in this case .ass
+        string $extension = ".ass";
+        // Put everithing togehter
+        string $fullpath = $path + $filename + $extension;
+        
+        ///////////////////////////////////////////////////////////////////////
+        // Select the group for exporting
+        select $each; 
+        // Export the selection as .ass
+        file -force -options "-shadowLinks 1;-mask 6399;-lightLinks 1;-boundingBox;-fullPath" -typ "ASS Export" -pr -es $fullpath;
+               
+
+        ///////////////////////////////////////////////////////////////////////
+        // Select the proxy for easier usage
+        // select $ddAssSel[1];
+        // And export the proxy geo as .ma file, so you can import it in any scene
+        file -force -options "v=0;" -typ "mayaAscii" -pr -es ($path  + "editable_hires/" + $filename + ".ma");
+
+        sets -e -forceElement initialShadingGroup;
+        // Set the proxy shape attributes
+        string $shName[] = `listRelatives -s $each`;
+        setAttr ($shName[0] + ".aiTranslator") -type "string" "procedural";
+        setAttr ($shName[0] + ".dso") -type "string" $fullpath;
+        setAttr ($shName[0] + ".aiOverrideLightLinking") 0;
+        setAttr ($shName[0] + ".aiOverrideShaders") 0;
+        file -force -options "v=0;" -typ "mayaAscii" -pr -es ($path + "proxy/"+ $filename + "_proxy"+ ".ma");
+        
+        // Turn off visibility for the exported Group (or object)
+        setAttr ($each + ".visibility") 0;
+        //setAttr ($each + ".useOutlinerColor") true;
+        //setAttr ($each + ".outlinerColor") -type float3 0.45 0.69 0.94;
+        //AEdagNodeCommonRefreshOutliners();
+    }
+    
+    //system ("explorer \"" + toNativePath($path) + "\"");
+    return true; 
+}
+
+
+///////////////////
+// define the proc for the FileBrowser Command
+global proc int ddEachMA(string $dirpath,string $type) 
+{
+    ///////////////////////////////////////////////////////////////////////
+    // Freeze transform before export to avoid Double Transformation
+    //makeIdentity -apply true -t 1 -r 1 -s 1 -n 0 -pn 1;
+    
+    // Get the list from Selection. 
+    // The first selected object (or group or locator) will be the exported ASS the second one will be the proxy of that.
+    string $ddAssSel[] = `ls -sl`;
+
+    string $path = ($dirpath + "/");
+    
+    for ($each in $ddAssSel)
+    {
+        // Create the variables for manageable paths
+        // The folder path
+        //string $path = ($dirpath + "/");
+        // The filename = the selected Group's name
+        string $filename = $each;
+
+        select $each; 
+        
+        file -force -options "v=0;" -typ "mayaAscii" -pr -es ($path + $filename + ".ma");
+
+        //sets -e -forceElement initialShadingGroup;
+        //file -force -options "v=0;" -typ "mayaAscii" -pr -es ($path + "proxy_" + $filename + ".ma");
+        
+        // Turn off visibility for the exported Group (or object)
+        //setAttr ($each + ".visibility") 0;
+        setAttr ($each + ".useOutlinerColor") true;
+        setAttr ($each + ".outlinerColor") -type float3 0.45 0.69 0.94;
+        AEdagNodeCommonRefreshOutliners();
+    }
+    
+    //system ("explorer \"" + toNativePath($path) + "\"");
+    return true; 
+}
+
+global proc int ddUpdateASS(string $dirpath,string $type) 
+{
+    ///////////////////////////////////////////////////////////////////////
+    // Freeze transform before export to avoid Double Transformation
+    // makeIdentity -apply true -t 1 -r 1 -s 1 -n 0 -pn 1;
+    
+    // Get the list from Selection. 
+    // The first selected object (or group or locator) will be the exported ASS the second one will be the proxy of that.
+    string $ddAssSel[] = `ls -sl`;
+
+    string $path = ($dirpath + "/");
+    
+    for ($each in $ddAssSel)
+    {
+    
+        ///////////////////////////////////////////////////////////////////////
+        // Create the variables for manageable paths
+        // The folder path
+        //string $path = ($dirpath + "/");
+        // The filename = the selected Group's name
+        string $filename = $each;
+        // The extension in this case .ass
+        string $extension = ".ass";
+        // Put everithing togehter
+        string $fullpath = $path + $filename + $extension;
+        
+        ///////////////////////////////////////////////////////////////////////
+        // Select the group for exporting
+        select $each; 
+        // Export the selection as .ass
+        file -force -options "-shadowLinks 1;-mask 6399;-lightLinks 1;-boundingBox;-fullPath" -typ "ASS Export" -pr -es $fullpath;
+    }
+    
+    //system ("explorer \"" + toNativePath($path) + "\"");
+    return true; 
+}
+
+
+// Multi Alembic Exporter
+global proc int ddTargetFolderABC(string $dirpath,string $type) 
+{
+    //print($dirpath+"\n");
+    string $sel[] = `ls -sl`;
+    //print $sel;
+    
+    for ($item in $sel)
+    {
+        AbcExport -j ("-root " + $item + " -file " + $dirpath + "/" + $item + ".abc" + " -uv -wcs -wuvs -dataFormat ogawa");
+    }
+    return true;    
+}
+
+// Multi mb Exporter
+global proc int ddTargetFolderMB(string $dirpath,string $type) 
+{
+    string $sel[] = `ls -sl`;
+    for ($item in $sel)
+    {
+        select $item;
+        string $objPath = $dirpath + "/" + $item + ".mb";
+        file -force -typ "mayaBinary" -pr -es $objPath;
+    }
+    select $sel;
+    return true; 
+}
+
+
+// Multi OBJ Exporter
+global proc int ddTargetFolderOBJ(string $dirpath,string $type) 
+{
+    string $sel[] = `ls -sl`;
+    for ($item in $sel)
+    {
+        select $item;
+        string $objPath = $dirpath + "/" + $item + ".obj";
+        file -force -options "groups=0;ptgroups=0;materials=0;smoothing=0;normals=1" -typ "OBJexport" -pr -es $objPath;
+    }
+    select $sel;
+    return true; 
+}
+
+
+global proc int ddTargetFolderFBX(string $dirpath,string $type) 
+{
+    string $sel[] = `ls -sl`;
+    for ($item in $sel)
+    {
+        select $item;
+        //string $objPath = $dirpath + "/" + $item + ".obj";
+        
+        string $path = ($dirpath + "/");
+        string $filename = $item;
+        string $extension = ".fbx";
+        string $fullpath = $path + $filename + $extension;
+    
+        //FBX Options
+        FBXExportTriangulate -v false;
+        FBXExportTangents -v false;
+        FBXExportSmoothingGroups -v false;
+        FBXExportSmoothMesh -v false;
+        FBXExportSmoothMesh -q;
+        FBXExport -f $fullpath -s;
+
+    }
+    select $sel;
+    return true; 
+
+    //fileBrowser("ddTargetFolderFBX", "Select the Target Folder", "", 4 );
+}
+
+//Fix Selected Objects with Export/Import OBJ trick
+
+global proc ddFixObjectsTrick()
+{
+    string $sel[] = `ls -sl`;
+    string $tmpDir = `internalVar -userTmpDir`;
+    print $tmpDir;
+    
+    print $sel;
+    for ($item in $sel)
+    {
+        // Select Object
+        select $item;
+        
+        string $shapes[] = `listRelatives -s $item`;
+        //print $shapes[0];
+        string $sgNode[] = `listConnections -source true -type shadingEngine $shapes[0]`;
+        //print "\n";
+        //print $sgNode;
+        
+        // Export Object
+        file -force -options "groups=0;ptgroups=0;materials=0;smoothing=0;normals=1" -typ "OBJexport" -pr -es ( $tmpDir + "/tempOBJ.obj");
+        
+        // Import Temp OBJ file
+        file -import 
+        -type "OBJ"  
+        -ignoreVersion 
+        -ra true 
+        -mergeNamespacesOnClash false 
+        //-namespace "tempOBJ" 
+        //-options "mo=1"  
+        -pr  
+        -importFrameRate false  
+        -importTimeRange "override" 
+        ( $tmpDir + "/tempOBJ.obj" );
+        select tempOBJ_Mesh;
+        select `rename ($item + "_fixed")`; 
+        sets -e -forceElement $sgNode[0];
+    }
+}
+
+
+
+//Fix Selected Objects with Export/Import OBJ trick no shader assign
+
+global proc ddFixObjectsSimple()
+{
+    string $sel[] = `ls -sl`;
+    string $tmpDir = `internalVar -userTmpDir`;
+    print $tmpDir;
+    
+    print $sel;
+    for ($item in $sel)
+    {
+        // Select Object
+        select $item;
+        
+        string $shapes[] = `listRelatives -s $item`;
+        //print $shapes[0];
+        //string $sgNode[] = `listConnections -source true -type shadingEngine $shapes[0]`;
+        //print "\n";
+        //print $sgNode;
+        
+        // Export Object
+        file -force -options "groups=0;ptgroups=0;materials=0;smoothing=0;normals=1" -typ "OBJexport" -pr -es ( $tmpDir + "/tempOBJ.obj");
+        
+        // Import Temp OBJ file
+        file -import 
+        -type "OBJ"  
+        -ignoreVersion 
+        -ra true 
+        -mergeNamespacesOnClash false 
+        //-namespace "tempOBJ" 
+        //-options "mo=1"  
+        -pr  
+        -importFrameRate false  
+        -importTimeRange "override" 
+        ( $tmpDir + "/tempOBJ.obj" );
+        select tempOBJ_Mesh;
+        select `rename ($item + "_fixed")`; 
+    }
+}
+
+// Multi Importer
+global proc ddMultiImporter()
+{
+    string $filter = "All Files (*.*)";
+    string $listOfFiles[] = `fileDialog2 -caption "Import Files" -ds 2 -fileMode 4 -okCaption "Import" -fileFilter $filter -hideNameEdit false`;
+    //print $listOfFiles;
+    
+    for ($each in $listOfFiles)
+        {
+            string $fileName[];
+            tokenize $each "/" $fileName;
+            
+            string $name = substituteAllString(($fileName[(size($fileName)-1)]), ".ma", "");
+            //print $name;
+            //print "\n";
+            file -import -type "mayaAscii"  -ignoreVersion -ra true -mergeNamespacesOnClash false -namespace $name -options "v=0;"  -pr  -importFrameRate true  -importTimeRange "override" $each;
+        }
+}
+
+
+// Replace as Instance with Last selected
+global proc ddRaplaceInst()
+{
+    replaceObjects 1 1 2 1;
+}
+
+//////////// GUI ////////////////
+if (`control -exists ddPipePanel`)deleteUI -control ddPipePanel;
+
+global proc ddPipeline()
+{
+
+    int $btnWidthA = 140;
+    int $btnHeightA = 45;
+    int $mWA = 0;
+
+    string $scriptDir = `internalVar -userScriptDir`;
+    string $fontType = "tinyBoldLabelFont";
+
+
+    gridLayout -numberOfColumns 2 -cellWidthHeight $btnWidthA $btnHeightA ddPipelinePanel;
+
+    shelfButton -fn $fontType -fla 0 -st "textOnly" -image1 "polySmooth.png" -bgc 0.2 0.2 0.2 -annotation "Save Version into Version History" -label "Save Version" -command "source \"simpleVersionControl.mel\"; svcSave()";
+    shelfButton -fn $fontType -fla 0 -st "textOnly" -image1 "polySmooth.png" -bgc 0.2 0.2 0.2 -annotation "Open Version Version History UI" -label "Open Version UI" -command "source \"simpleVersionControl.mel\"; svcUI()";
+
+    shelfButton -fn $fontType -fla 0 -st "textOnly" -image1 "polySmooth.png" -bgc 0.25 0.25 0.25 -annotation "Replace selected Object with a Cube" -label "Replace with \nCube" -command ddReplaceWithCube;
+    shelfButton -fn $fontType -fla 0 -st "textOnly" -image1 "polySmooth.png" -bgc 0.25 0.25 0.25 -annotation "Material Assignement Issue Checker: Comapring _lo and _hi geo pair Materials." -label "Material Assignement \nIssue Checker" -command ddMaterialIssueChecker;
+    
+    shelfButton -fn $fontType -fla 0 -st "textOnly" -image1 "polySmooth.png" -bgc 0.2 0.2 0.2 -annotation "Replace All Selected as Insatnce with Last Selected" -label "Replace as Instance" -command ddRaplaceInst;
+    shelfButton -fn $fontType -fla 0 -st "textOnly" -image ($scriptDir + "/icons/ddFix.png") -mw $mWA -bgc  0.2 0.2 0.2 -annotation "Instance" -label "Instance" -command instance;
+
+    shelfButton -fn $fontType -fla 0 -st "iconAndTextHorizontal" -image ($scriptDir + "/icons/substance.png") -mw $mWA -bgc 0.2 0.4 0.2 -annotation "Export for \nSubstance Painter" -label "Export Selected \nobjects for \nSubstance Painter" -command ddExportForSubstance;
+    shelfButton -fn $fontType -fla 1 -st "textOnly" -bgc 0.27 0.27 0.27 ;
+
+    shelfButton -fn $fontType -fla 0 -st "iconAndTextHorizontal" -image ($scriptDir + "/icons/ddExport.png") -mw $mWA -bgc 0.3 0.5 0.3 -annotation "Export Asset as ASS + Proxy + Hires (Select Hires and than Proxy)" -label "Export ASS \n+Proxy+Hires" -command "fileBrowser( \"ddProxyHiresASS\", \"Select the Target Folder\", \"\", 4 );";
+    shelfButton -fn $fontType -fla 0 -st "iconAndTextHorizontal" -image ($scriptDir + "/icons/ddExport.png") -mw $mWA -bgc 0.3 0.5 0.3 -annotation "Export Each Selected Asset as ASS (for non-Proxy/Hires assets)" -label "Export Each \nSelected as ASS" -command "fileBrowser( \"ddEachASS\", \"Select the Target Folder\", \"\", 4 );";
+
+    shelfButton -fn $fontType -fla 0 -st "iconAndTextHorizontal" -image ($scriptDir + "/icons/ddExport.png") -mw $mWA -bgc 0.3 0.5 0.3 -annotation "Update ASS (form selected High Res object or group)" -label "Update ASS" -command "fileBrowser( \"ddUpdateASS\", \"Select the Target Folder\", \"\", 4 );";
+    shelfButton -fn $fontType -fla 0 -st "iconAndTextHorizontal" -image ($scriptDir + "/icons/ddExport.png") -mw $mWA -bgc 0.3 0.5 0.3 -annotation "Export Each Selected as .ma" -label "Export Each \nSelected as .ma" -command "fileBrowser( \"ddEachMA\", \"Select the Target Folder\", \"\", 4 );";
+
+    shelfButton -fn $fontType -fla 0 -st "iconAndTextHorizontal" -image ($scriptDir + "/icons/ddFix.png") -mw $mWA -bgc 0.15 0.35 0.15 -annotation "Replace with Hires" -label "Replace with \nHires" -command ddReplaceWithHires;
+    shelfButton -fn $fontType -fla 0 -st "iconAndTextHorizontal" -image ($scriptDir + "/icons/ddFix.png") -mw $mWA -bgc 0.15 0.35 0.15 -annotation "Replace with Proxy" -label "Replace with \nProxy" -command ddReplaceWithProxy;
+
+    shelfButton -fn $fontType -fla 0 -st "iconAndTextHorizontal" -image ($scriptDir + "/icons/ddExport.png") -mw $mWA -bgc 0.3 0.3 0.5 -annotation "Multi Alembic Exporter" -label "Multi Alembic \nExporter" -command "fileBrowser( \"ddTargetFolderABC\", \"Select the Target Folder\", \"\", 4 );";
+    shelfButton -fn $fontType -fla 0 -st "iconAndTextHorizontal" -image ($scriptDir + "/icons/ddExport.png") -mw $mWA -bgc 0.3 0.3 0.5 -annotation "Multi OBJ Exporter" -label "Multi OBJ \nExporter" -command "fileBrowser( \"ddTargetFolderOBJ\", \"Select the Target Folder\", \"\", 4 );";
+    
+    shelfButton -fn $fontType -fla 0 -st "iconAndTextHorizontal" -image ($scriptDir + "/icons/ddExport.png") -mw $mWA -bgc 0.3 0.3 0.5 -annotation "Multi FBX Exporter" -label "Multi FBX \nExporter" -command "fileBrowser( \"ddTargetFolderFBX\", \"Select the Target Folder\", \"\", 4 );";
+    shelfButton -fn $fontType -fla 0 -st "iconAndTextHorizontal" -image ($scriptDir + "/icons/ddExport.png") -mw $mWA -bgc 0.3 0.3 0.5 -annotation "Multi Maya (.mb) Exporter" -label "Multi .mb \nExporter" -command "fileBrowser( \"ddTargetFolderMB\", \"Select the Target Folder\", \"\", 4 );";
+
+    shelfButton -fn $fontType -fla 0 -st "iconAndTextHorizontal" -image ($scriptDir + "/icons/ddFix.png") -mw $mWA -bgc 0.2 0.2 0.4 -annotation "Fix Selected Objects | Export/Import as OBJ" -label "Fix Selected \nExport/Import \nas OBJ (Material)" -command ddFixObjectsTrick;
+    shelfButton -fn $fontType -fla 0 -st "iconAndTextHorizontal" -image ($scriptDir + "/icons/ddFix.png") -mw $mWA -bgc 0.2 0.2 0.4 -annotation "Fix Selected Objects | Export/Import as OBJ Simple" -label "Fix Selected \nExport/Import \nas OBJ" -command ddFixObjectsSimple;
+
+    shelfButton -fn $fontType -fla 0 -st "textOnly" -mw $mWA -bgc 0.2 0.2 0.2 -annotation "Multi Importer" -label "Multi Importer" -command ddMultiImporter;
+    shelfButton -fn $fontType -fla 0 -st "textOnly" -mw $mWA -bgc 0.2 0.2 0.2 -annotation "Layout Tool" -label "Layout Tool" -command bt_clickDragObj;
+
+    setParent ..;
+}
+workspaceControl -label "ddPipeline Panel 1.0" -retain false -floating true -uiScript "ddPipeline();" ddPipePanel;
